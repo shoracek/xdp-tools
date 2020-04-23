@@ -27,6 +27,7 @@ static const struct loadopt {
 	char *pin_path;
 	char *section_name;
 	bool force;
+	bool egress;
 	enum xdp_attach_mode mode;
 } defaults_load = {
 	.mode = XDP_MODE_UNSPEC
@@ -44,6 +45,9 @@ static struct prog_option load_options[] = {
 	DEFINE_OPTION("force", OPT_BOOL, struct loadopt, force,
 		      .short_opt = 'F',
 		      .help = "Force loading of XDP program"),
+	DEFINE_OPTION("egress", OPT_BOOL, struct loadopt, egress,
+		      .short_opt = 'e',
+		      .help = "Attach in egress mode"),
 	DEFINE_OPTION("mode", OPT_ENUM, struct loadopt, mode,
 		      .short_opt = 'm',
 		      .typearg = xdp_modes,
@@ -97,7 +101,7 @@ int load_multiprog(const struct loadopt *opt)
 		progs[i] = p;
 	}
 
-	mp = xdp_multiprog__generate(progs, num_progs);
+	mp = xdp_multiprog__generate(progs, num_progs, opt->egress);
 
 	if (IS_ERR(mp)) {
 		err = PTR_ERR(mp);
@@ -112,7 +116,7 @@ int load_multiprog(const struct loadopt *opt)
 	}
 
 	err = xdp_multiprog__attach(mp, opt->iface.ifindex,
-				    opt->force, opt->mode);
+				    opt->force, opt->mode, opt->egress);
 	if (err) {
 		pr_warn("Failed to attach program: %s\n", strerror(-err));
 		goto out_free_mp;
@@ -186,7 +190,7 @@ retry:
 
 	bpf_object__for_each_program(prog, obj) {
 		bpf_program__set_type(prog, BPF_PROG_TYPE_XDP);
-		bpf_program__set_expected_attach_type(prog, BPF_PROG_TYPE_XDP);
+		bpf_program__set_expected_attach_type(prog, opt->egress ? BPF_PROG_TYPE_XDP : BPF_XDP_EGRESS);
 	}
 
 	err = bpf_object__load(obj);
@@ -207,7 +211,7 @@ retry:
 	}
 
 	err = attach_xdp_program(obj, opt->section_name, &opt->iface, opt->force,
-				 opt->mode, opt->pin_path);
+				 opt->mode, opt->pin_path, opt->egress);
 	if (err) {
 		pr_warn("Couldn't attach XDP program on iface '%s'\n",
 			opt->iface.ifname);

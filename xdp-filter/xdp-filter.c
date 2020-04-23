@@ -293,7 +293,7 @@ retry:
 		*chr = '\0';
 
 	err = attach_xdp_program(obj, progname, &opt->iface, opt->force,
-				 opt->mode, pin_root_path);
+				 opt->mode, pin_root_path, false);
 	if (err) {
 		pr_warn("Couldn't attach XDP program on iface '%s'\n",
 			opt->iface.ifname);

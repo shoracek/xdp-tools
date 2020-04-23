@@ -70,7 +70,7 @@ struct bpf_object *open_bpf_file(const char *progname,
 int load_bpf_object(struct bpf_object *obj, bool raise_rlimit);
 int attach_xdp_program(const struct bpf_object *obj, const char *prog_name,
                        const struct iface *iface, bool force,
-                       enum xdp_attach_mode mode, const char *pin_root_dir);
+                       enum xdp_attach_mode mode, const char *pin_root_dir, bool egress);
 int detach_xdp_program(const struct iface *iface, const char *pin_root_dir);
 
 typedef int (*program_callback)(const struct iface *iface,

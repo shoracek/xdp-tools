@@ -41,13 +41,13 @@ int xdp_program__print_chain_call_actions(struct xdp_program *prog,
 					  size_t buf_len);
 
 struct xdp_multiprog *xdp_multiprog__generate(struct xdp_program **progs,
-                                              size_t num_progs);
+                                              size_t num_progs, bool egress);
 void xdp_multiprog__free(struct xdp_multiprog *mp);
 int xdp_multiprog__pin(struct xdp_multiprog *mp);
 int xdp_multiprog__unpin(struct xdp_multiprog *mp);
 int xdp_multiprog__attach(struct xdp_multiprog *mp,
                           int ifindex, bool force,
-                          enum xdp_attach_mode mode);
+                          enum xdp_attach_mode mode, bool egress);
 struct xdp_multiprog *xdp_multiprog__get_from_ifindex(int ifindex);
 struct xdp_program *xdp_multiprog__next_prog(struct xdp_program *prog,
 					     struct xdp_multiprog *mp);

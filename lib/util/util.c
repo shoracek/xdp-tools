@@ -275,7 +275,7 @@ int make_dir_subdir(const char *parent, const char *dir)
 
 int attach_xdp_program(const struct bpf_object *obj, const char *prog_name,
 		       const struct iface *iface, bool force, enum xdp_attach_mode mode,
-		       const char *pin_root_path)
+		       const char *pin_root_path, bool egress)
 {
 	char pin_path[PATH_MAX], old_prog_name[100];
 	struct bpf_program *prog = NULL;
@@ -285,6 +285,8 @@ int attach_xdp_program(const struct bpf_object *obj, const char *prog_name,
 	struct stat sb = {};
 	bool has_old;
 	int prog_fd;
+	DECLARE_LIBBPF_OPTS(bpf_xdp_set_link_opts, opts,
+			    .egress = egress);
 
 	has_old = program_is_loaded(iface->ifindex, NULL, NULL, &info);
 
@@ -332,7 +334,7 @@ int attach_xdp_program(const struct bpf_object *obj, const char *prog_name,
 		return -EFAULT;
 	}
 
-	err = bpf_set_link_xdp_fd(ifindex, prog_fd, xdp_flags);
+	err = bpf_set_link_xdp_fd_opts(ifindex, prog_fd, xdp_flags, &opts);
 	if (err == -EEXIST && !(xdp_flags & XDP_FLAGS_UPDATE_IF_NOEXIST)) {
 		/* Force mode didn't work, probably because a program of the
 		 * opposite type is loaded. Let's unload that and try loading
@@ -344,9 +346,9 @@ int attach_xdp_program(const struct bpf_object *obj, const char *prog_name,
 		xdp_flags &= ~XDP_FLAGS_MODES;
 		xdp_flags |= (mode == XDP_MODE_SKB) ? XDP_FLAGS_DRV_MODE :
 			XDP_FLAGS_SKB_MODE;
-		err = bpf_set_link_xdp_fd(ifindex, -1, xdp_flags);
+		err = bpf_set_link_xdp_fd_opts(ifindex, -1, xdp_flags, &opts);
 		if (!err)
-			err = bpf_set_link_xdp_fd(ifindex, prog_fd, old_flags);
+			err = bpf_set_link_xdp_fd_opts(ifindex, prog_fd, old_flags, &opts);
 	}
 	if (err < 0) {
 		pr_warn("Error attaching XDP program to %s: %s\n",
@@ -406,7 +408,7 @@ int attach_xdp_program(const struct bpf_object *obj, const char *prog_name,
 	if (err) {
 		pr_warn("Unable to pin XDP program at %s: %s\n",
 			pin_path, strerror(-err));
-		bpf_set_link_xdp_fd(ifindex, -1, xdp_flags);
+		bpf_set_link_xdp_fd_opts(ifindex, -1, xdp_flags, &opts);
 	}
 	pr_debug("XDP program pinned at %s\n", pin_path);
 

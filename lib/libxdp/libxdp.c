@@ -1231,7 +1231,7 @@ err:
 }
 
 struct xdp_multiprog *xdp_multiprog__generate(struct xdp_program **progs,
-					      size_t num_progs)
+					      size_t num_progs, bool egress)
 {
 	struct xdp_program *dispatcher;
 	struct xdp_multiprog *mp;
@@ -1286,6 +1286,9 @@ struct xdp_multiprog *xdp_multiprog__generate(struct xdp_program **progs,
 		pr_warn("Failed to set rodata for object file %s\n", buf);
 		goto err;
 	}
+
+	bpf_program__set_expected_attach_type(dispatcher->bpf_prog,
+					      egress ? BPF_XDP_EGRESS : BPF_PROG_TYPE_XDP);
 
 	err = xdp_multiprog__load(mp);
 	if (err)
@@ -1456,9 +1459,11 @@ out:
 
 int xdp_multiprog__attach(struct xdp_multiprog *mp,
 			  int ifindex, bool force,
-			  enum xdp_attach_mode mode)
+			  enum xdp_attach_mode mode, bool egress)
 {
 	int err = 0, xdp_flags = 0, prog_fd;
+	DECLARE_LIBBPF_OPTS(bpf_xdp_set_link_opts, opts,
+			    .egress = egress);
 
 	if (!mp)
 		return -EINVAL;
@@ -1486,7 +1491,7 @@ int xdp_multiprog__attach(struct xdp_multiprog *mp,
 	if (!force)
 		xdp_flags |= XDP_FLAGS_UPDATE_IF_NOEXIST;
 
-	err = bpf_set_link_xdp_fd(ifindex, prog_fd, xdp_flags);
+	err = bpf_set_link_xdp_fd_opts(ifindex, prog_fd, xdp_flags, &opts);
 	if (err == -EEXIST && !(xdp_flags & XDP_FLAGS_UPDATE_IF_NOEXIST)) {
 		/* Program replace didn't work, probably because a program of
 		 * the opposite type is loaded. Let's unload that and try
@@ -1500,7 +1505,8 @@ int xdp_multiprog__attach(struct xdp_multiprog *mp,
 			XDP_FLAGS_SKB_MODE;
 		err = bpf_set_link_xdp_fd(ifindex, -1, xdp_flags);
 		if (!err)
-			err = bpf_set_link_xdp_fd(ifindex, prog_fd, old_flags);
+			err = bpf_set_link_xdp_fd_opts(ifindex, prog_fd,
+						       old_flags, &opts);
 	}
 	if (err < 0) {
 		pr_warn("Error attaching XDP program to ifindex %d: %s\n",
