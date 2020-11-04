@@ -356,6 +356,15 @@ teardown()
 
     rm -rf "$STATEDIR"
 
+    for i in /tmp/"${NS}"_PID_*; do
+        if [[ $i == "/tmp/${NS}_PID_*" ]]; then
+            break
+        fi
+
+        pid=$(grep -e "[0-9]+" -o <<< "$i" | head -n 1)
+        stop_background "$pid" &> /dev/null || true
+    done
+
     CLEANUP_FUNC=
 }
 
