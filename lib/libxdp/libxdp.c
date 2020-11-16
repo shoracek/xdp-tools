@@ -1219,10 +1219,16 @@ int xdp_program__attach_multi(struct xdp_program **progs, size_t num_progs,
 	}
 
 	if (mode == XDP_MODE_HW) {
-		if (num_progs > 1)
-			return -EINVAL;
+		struct xdp_program *prog;
+		struct bpf_map *map;
 
-		return xdp_program__attach_single(progs[0], ifindex, mode);
+		prog = progs[0];
+		bpf_program__set_ifindex(prog->bpf_prog, ifindex);
+		bpf_object__for_each_map (map, prog->bpf_obj) {
+			bpf_map__set_ifindex(map, ifindex);
+		}
+
+		return xdp_program__attach_single(prog, ifindex, mode);
 	}
 
 	mp = xdp_multiprog__generate(progs, num_progs, ifindex);
@@ -1684,6 +1690,9 @@ struct xdp_multiprog *xdp_multiprog__get_from_ifindex(int ifindex)
 	if (xinfo.attach_mode == XDP_ATTACHED_SKB) {
 		prog_id = xinfo.skb_prog_id;
 		mode = XDP_MODE_SKB;
+	} else if (xinfo.attach_mode == XDP_ATTACHED_HW) {
+		prog_id = xinfo.hw_prog_id;
+		mode = XDP_MODE_HW;
 	} else {
 		prog_id = xinfo.drv_prog_id;
 		mode = XDP_MODE_NATIVE;
