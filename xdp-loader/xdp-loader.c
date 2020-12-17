@@ -207,10 +207,7 @@ int do_unload(const void *cfg, __unused const char *pin_root_path)
 		goto out;
 	}
 
-	if (opt->all ||
-	    (xdp_multiprog__is_legacy(mp) &&
-	     (xdp_program__id(xdp_multiprog__main_prog(mp)) == opt->prog_id) &&
-	     (xdp_multiprog__hw_prog(mp) == NULL || xdp_multiprog__main_prog(mp) == NULL))) {
+	if (opt->all) {
 		err = xdp_multiprog__detach(mp);
 		if (err) {
 			pr_warn("Unable to detach XDP program: %s\n",
@@ -224,6 +221,14 @@ int do_unload(const void *cfg, __unused const char *pin_root_path)
 			if (xdp_program__id(prog) == opt->prog_id) {
 				mode = xdp_multiprog__attach_mode(mp);
 				break;
+			}
+		}
+		if (!prog && xdp_multiprog__is_legacy(mp)) {
+			prog = xdp_multiprog__main_prog(mp);
+			if (xdp_program__id(prog) == opt->prog_id) {
+				mode = xdp_multiprog__attach_mode(mp);
+			} else {
+				prog = NULL;
 			}
 		}
 		if (!prog) {
@@ -242,8 +247,7 @@ int do_unload(const void *cfg, __unused const char *pin_root_path)
 		}
 		pr_debug("Detaching XDP program with ID %u from %s\n",
 			 xdp_program__id(prog), opt->iface.ifname);
-		err = xdp_program__detach(prog, opt->iface.ifindex,
-					  mode, 0);
+		err = xdp_program__detach(prog, opt->iface.ifindex, mode, 0);
 		if (err) {
 			pr_warn("Unable to detach XDP program: %s\n",
 				strerror(-err));

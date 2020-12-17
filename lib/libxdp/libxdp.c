@@ -1297,9 +1297,14 @@ int xdp_program__detach_multi(struct xdp_program **progs, size_t num_progs,
 		return -EINVAL;
 
 	mp = xdp_multiprog__get_from_ifindex(ifindex);
-	if (IS_ERR_OR_NULL(mp) || mp->is_legacy) {
+	if (IS_ERR_OR_NULL(mp)) {
 		pr_warn("No XDP dispatcher found on ifindex %d\n", ifindex);
 		return -ENOENT;
+	}
+
+	if (mp->is_legacy) {
+		err = xdp_multiprog__attach(mp, NULL, mode);
+		goto out;
 	}
 
 	if (mode != XDP_MODE_UNSPEC && mp->attach_mode != mode && mode != XDP_MODE_HW) {
