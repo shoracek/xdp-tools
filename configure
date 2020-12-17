@@ -16,9 +16,11 @@ check_opts()
     : ${PRODUCTION:=0}
     : ${DYNAMIC_LIBXDP:=0}
     : ${MAX_DISPATCHER_ACTIONS:=10}
+    : ${BPF_TARGET:=bpf}
     echo "PRODUCTION:=${PRODUCTION}" >>$CONFIG
     echo "DYNAMIC_LIBXDP:=${DYNAMIC_LIBXDP}" >>$CONFIG
     echo "MAX_DISPATCHER_ACTIONS:=${MAX_DISPATCHER_ACTIONS}" >>$CONFIG
+    echo "BPF_TARGET:=${BPF_TARGET}" >>$CONFIG
 }
 
 check_toolchain()
@@ -164,7 +166,7 @@ check_libbpf()
 {
     local libbpf_err
 
-    if ${PKG_CONFIG} libbpf --exists || [ -n "$LIBBPF_DIR" ]; then
+    if [ "${FORCE_SUBDIR_LIBBPF:-0}" -ne "1" ] && ${PKG_CONFIG} libbpf --exists || [ -n "$LIBBPF_DIR" ]; then
 
         if [ -n "$LIBBPF_DIR" ]; then
             LIBBPF_CFLAGS="-I${LIBBPF_DIR}/include -L${LIBBPF_DIR}/lib"

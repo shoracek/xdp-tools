@@ -1,5 +1,6 @@
 CFLAGS ?= -O2 -g
 BPF_CFLAGS ?= -Wno-visibility
+BPF_TARGET ?= bpf
 
 include $(LIB_DIR)/../config.mk
 include $(LIB_DIR)/../version.mk
@@ -42,9 +43,8 @@ DEFINES += -DHAVE_SECURE_GETENV
 endif
 
 
-CFLAGS += -Werror $(DEFINES)
+CFLAGS += -std=gnu11 -Wextra -Werror $(DEFINES)
 BPF_CFLAGS += $(DEFINES)
 
 CONFIGMK := $(LIB_DIR)/../config.mk
 LIBMK := Makefile $(CONFIGMK) $(LIB_DIR)/defines.mk $(LIB_DIR)/common.mk $(LIB_DIR)/../version.mk
-

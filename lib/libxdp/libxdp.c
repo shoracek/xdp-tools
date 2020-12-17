@@ -35,8 +35,8 @@
 #define ARRAY_SIZE(x) (sizeof(x) / sizeof(*(x)))
 
 static const char *dispatcher_feature_err =
-	"This most likely means that the kernel does not support the features\n"
-	"needed by the multiprog dispatcher, either because it is too old entirely,\n"
+	"This means that the kernel does not support the features needed\n"
+	"by the multiprog dispatcher, either because it is too old entirely,\n"
 	"or because it is not yet supported on the current architecture.\n";
 
 struct xdp_program {
@@ -66,6 +66,7 @@ struct xdp_multiprog {
 	size_t num_links;
 	bool is_loaded;
 	bool is_legacy;
+	bool checked_compat;
 	enum xdp_attach_mode attach_mode;
 	int ifindex;
 };
@@ -291,8 +292,9 @@ static int xdp_lock_release(int lock_fd)
 static int xdp_attach_fd(int prog_fd, int old_fd, int ifindex,
 			 enum xdp_attach_mode mode)
 {
-	int err = 0, xdp_flags = 0;
 	DECLARE_LIBBPF_OPTS(bpf_xdp_set_link_opts, opts, .old_fd = old_fd);
+	struct bpf_xdp_set_link_opts *setopts = &opts;
+	int err = 0, xdp_flags = 0;
 
 	pr_debug("Replacing XDP fd %d with %d on ifindex %d\n",
 		 old_fd, prog_fd, ifindex);
@@ -313,8 +315,14 @@ static int xdp_attach_fd(int prog_fd, int old_fd, int ifindex,
 	case XDP_MODE_UNSPEC:
 		break;
 	}
-	err = bpf_set_link_xdp_fd_opts(ifindex, prog_fd, xdp_flags, &opts);
+again:
+	err = bpf_set_link_xdp_fd_opts(ifindex, prog_fd, xdp_flags, setopts);
 	if (err < 0) {
+		if (err == -EINVAL && setopts) {
+			pr_debug("Got 'invalid argument', trying again without old_fd\n");
+			setopts = NULL;
+			goto again;
+		}
 		pr_warn("Error attaching XDP program to ifindex %d: %s\n",
 			ifindex, strerror(-err));
 
@@ -476,7 +484,7 @@ int xdp_program__print_chain_call_actions(const struct xdp_program *prog,
 				first = false;
 			}
 			len = snprintf(pos, buf_len, "%s", xdp_action_names[i]);
-			if (len < 0 || len >= buf_len)
+			if (len < 0 || (size_t)len >= buf_len)
 				goto err_len;
 			pos += len;
 			buf_len -= len;
@@ -1231,6 +1239,19 @@ static struct xdp_program *xdp_program__clone(struct xdp_program *prog)
 	return new_prog;
 }
 
+static int xdp_program__attach_single(struct xdp_program *prog, int ifindex,
+				      enum xdp_attach_mode mode)
+{
+	int err;
+
+	bpf_program__set_type(prog->bpf_prog, BPF_PROG_TYPE_XDP);
+	err = xdp_program__load(prog);
+	if (err)
+		return err;
+
+	return xdp_attach_fd(xdp_program__fd(prog), -1, ifindex, mode);
+}
+
 int xdp_program__attach_multi(struct xdp_program **progs, size_t num_progs,
 			      int ifindex, enum xdp_attach_mode mode,
 			      unsigned int flags)
@@ -1250,23 +1271,26 @@ int xdp_program__attach_multi(struct xdp_program **progs, size_t num_progs,
 	}
 
 	if (mode == XDP_MODE_HW) {
-		struct xdp_program *prog;
-
 		if (num_progs > 1)
 			return -EINVAL;
 
-		prog = progs[0];
-		err = xdp_program__load(prog);
-		if (err)
-			goto out;
-
-		return xdp_attach_fd(xdp_program__fd(prog), -1, ifindex, mode);
+		return xdp_program__attach_single(progs[0], ifindex, mode);
 	}
 
 	mp = xdp_multiprog__generate(progs, num_progs, ifindex);
 	if (IS_ERR(mp)) {
 		err = PTR_ERR(mp);
 		mp = NULL;
+		if (err == -EOPNOTSUPP) {
+			if (num_progs == 1) {
+				pr_warn("Falling back to loading single prog "
+					"without dispatcher\n");
+				return xdp_program__attach_single(progs[0], ifindex, mode);
+			} else {
+				pr_warn("Can't fall back to legacy load with %zu "
+					"programs\n%s\n", num_progs, dispatcher_feature_err);
+			}
+		}
 		goto out;
 	}
 
@@ -1305,7 +1329,8 @@ int xdp_program__detach_multi(struct xdp_program **progs, size_t num_progs,
 			      unsigned int flags)
 {
 	struct xdp_multiprog *mp;
-	int err = 0, i;
+	int err = 0;
+	size_t i;
 
 	if (flags)
 		return -EINVAL;
@@ -1329,7 +1354,7 @@ int xdp_program__detach_multi(struct xdp_program **progs, size_t num_progs,
 		bool found = false;
 
 		if (!progs[i]->prog_id) {
-			pr_warn("Program %d not loaded\n", i);
+			pr_warn("Program %zu not loaded\n", i);
 			err = -EINVAL;
 			goto out;
 		}
@@ -1428,8 +1453,7 @@ static int xdp_multiprog__load(struct xdp_multiprog *mp)
 	err = xdp_program__load(mp->main_prog);
 	if (err) {
 		if (err == -LIBBPF_ERRNO__VERIFY) {
-			pr_warn("Got verifier error while loading dispatcher.\n%s\n",
-				dispatcher_feature_err);
+			pr_warn("Got verifier error while loading dispatcher.\n");
 			err = -EOPNOTSUPP;
 		} else {
 			pr_warn("Failed to load dispatcher: %s\n",
@@ -1727,6 +1751,62 @@ struct xdp_multiprog *xdp_multiprog__get_from_ifindex(int ifindex)
 	return mp;
 }
 
+static int xdp_multiprog__check_compat(struct xdp_multiprog *mp)
+{
+	struct xdp_program *test_prog;
+	int err, lfd;
+
+	if (mp->checked_compat)
+		return 0;
+
+	pr_debug("Checking dispatcher compatibility\n");
+	test_prog = xdp_program__find_file("xdp-dispatcher.o", "xdp/pass", NULL);
+	if (IS_ERR(test_prog)) {
+		err = PTR_ERR(test_prog);
+		pr_warn("Couldn't open BPF file xdp-dispatcher.o\n");
+		return err;
+	}
+
+	err = bpf_program__set_attach_target(test_prog->bpf_prog,
+					     mp->main_prog->prog_fd,
+					     "prog0");
+	if (err) {
+		pr_debug("Failed to set attach target: %s\n", strerror(-err));
+		goto out;
+	}
+
+	bpf_program__set_type(test_prog->bpf_prog, BPF_PROG_TYPE_EXT);
+	bpf_program__set_expected_attach_type(test_prog->bpf_prog, 0);
+	err = xdp_program__load(test_prog);
+	if (err) {
+		char buf[100] = {};
+		libxdp_strerror(err, buf, sizeof(buf));
+		pr_debug("Failed to load program %s: %s\n",
+			xdp_program__name(test_prog), buf);
+		goto out;
+	}
+
+	lfd = bpf_raw_tracepoint_open(NULL, test_prog->prog_fd);
+	if (lfd < 0) {
+		err = -errno;
+		pr_debug("Failed to attach test program to dispatcher: %s\n",
+			 strerror(-err));
+		goto out;
+	}
+	close(lfd);
+	mp->checked_compat = true;
+out:
+	xdp_program__close(test_prog);
+
+	if (err) {
+		pr_warn("Compatibility check for dispatcher program failed: %s\n",
+			strerror(-err));
+		return -EOPNOTSUPP;
+	}
+
+	return 0;
+}
+
 static int xdp_multiprog__link_prog(struct xdp_multiprog *mp,
 				    struct xdp_program *prog)
 {
@@ -1737,6 +1817,16 @@ static int xdp_multiprog__link_prog(struct xdp_multiprog *mp,
 	if (!mp || !prog || !mp->is_loaded ||
 	    mp->num_links >= mp->config.num_progs_enabled)
 		return -EINVAL;
+
+	err = xdp_multiprog__check_compat(mp);
+	if (err)
+		return err;
+
+	if (!prog->btf) {
+		pr_warn("Program %s has no BTF information, so we can't load it as multiprog\n",
+			xdp_program__name(prog));
+		return -EOPNOTSUPP;
+	}
 
 	pr_debug("Linking prog %s as multiprog entry %zu\n",
 		 xdp_program__name(prog), mp->num_links);
@@ -1761,12 +1851,19 @@ static int xdp_multiprog__link_prog(struct xdp_multiprog *mp,
 		}
 
 		bpf_program__set_type(prog->bpf_prog, BPF_PROG_TYPE_EXT);
+		bpf_program__set_expected_attach_type(prog->bpf_prog, 0);
 		err = xdp_program__load(prog);
 		if (err) {
-			char buf[100] = {};
-			libxdp_strerror(err, buf, sizeof(buf));
-			pr_warn("Failed to load program %s: %s\n",
-				xdp_program__name(prog), buf);
+			if (err == -E2BIG) {
+				pr_warn("Got 'argument list too long' error while "
+					"loading component program.\n");
+				err = -EOPNOTSUPP;
+			} else {
+				char buf[100] = {};
+				libxdp_strerror(err, buf, sizeof(buf));
+				pr_warn("Failed to load program %s: %s\n",
+					xdp_program__name(prog), buf);
+			}
 			goto err;
 		}
 
@@ -1785,8 +1882,7 @@ static int xdp_multiprog__link_prog(struct xdp_multiprog *mp,
 			err = -errno;
 			if (err == -EPERM) {
 				pr_warn("Got 'permission denied' error while "
-					"attaching program to dispatcher.\n%s\n",
-					dispatcher_feature_err);
+					"attaching program to dispatcher.\n");
 				err = -EOPNOTSUPP;
 			} else {
 				pr_warn("Failed to attach program %s to dispatcher: %s\n",
@@ -1833,8 +1929,8 @@ static struct xdp_multiprog *xdp_multiprog__generate(struct xdp_program **progs,
 	struct xdp_program *dispatcher;
 	struct xdp_multiprog *mp;
 	struct bpf_map *map;
-	char buf[PATH_MAX];
-	int err, i;
+	size_t i;
+	int err;
 
 	if (!progs || !num_progs || num_progs > MAX_DISPATCHER_ACTIONS)
 		return ERR_PTR(-EINVAL);
@@ -1852,13 +1948,14 @@ static struct xdp_multiprog *xdp_multiprog__generate(struct xdp_program **progs,
 					    "xdp/dispatcher", NULL);
 	if (IS_ERR(dispatcher)) {
 		err = PTR_ERR(dispatcher);
-		pr_warn("Couldn't open BPF file %s\n", buf);
+		pr_warn("Couldn't open BPF file 'xdp-dispatcher.o'\n");
 		goto err;
 	}
 
 	err = check_dispatcher_version(dispatcher->btf);
 	if (err) {
-		pr_warn("XDP dispatcher object version check failed\n");
+		pr_warn("XDP dispatcher object version check failed: %s\n",
+			strerror(-err));
 		goto err;
 	}
 
@@ -1866,7 +1963,7 @@ static struct xdp_multiprog *xdp_multiprog__generate(struct xdp_program **progs,
 
 	map = bpf_map__next(NULL, mp->main_prog->bpf_obj);
 	if (!map) {
-		pr_warn("Couldn't find rodata map in object file %s\n", buf);
+		pr_warn("Couldn't find rodata map in object file 'xdp-dispatcher.o'\n");
 		err = -ENOENT;
 		goto err;
 	}
@@ -1881,7 +1978,7 @@ static struct xdp_multiprog *xdp_multiprog__generate(struct xdp_program **progs,
 
 	err = bpf_map__set_initial_value(map, &mp->config, sizeof(mp->config));
 	if (err) {
-		pr_warn("Failed to set rodata for object file %s\n", buf);
+		pr_warn("Failed to set rodata for object file 'xdp-dispatcher.o'\n");
 		goto err;
 	}
 
