@@ -1175,7 +1175,7 @@ static void signal_handler(__unused int signo)
 /*****************************************************************************
  * main()
  *****************************************************************************/
-int main(int argc, char **argv)
+int main2(int argc, char **argv)
 {
 	if (parse_cmdline_args(argc, argv, xdpdump_options, &cfg_dumpopt,
 			       PROG_NAME, PROG_NAME,
@@ -1226,4 +1226,55 @@ int main(int argc, char **argv)
 		return EXIT_FAILURE;
 
 	return EXIT_SUCCESS;
+}
+
+int main(int argc, char **argv) {
+	printf("%i %s\n", argc, argv[0]);
+	int ifindex = 10;
+	const char *filename = "basic.o";
+	const char *section_name = "xdp_pass";
+	int step = atoi(argv[1]);
+
+	
+	struct xdp_program *prog;
+	struct xdp_multiprog *mp;
+
+	if (step == 1) {
+		// open and close
+		prog = xdp_program__open_file(filename, section_name, NULL);
+		xdp_program__attach(prog, ifindex, XDP_MODE_HW, 0);
+		xdp_program__detach(prog, ifindex, XDP_MODE_HW, 0);
+		xdp_program__close(prog);
+	}
+	if (step == 2) {
+		// open multiple
+		prog = xdp_program__open_file(filename, section_name, NULL);
+		// xdp_program__attach(prog, ifindex, XDP_MODE_HW, 0);
+		xdp_program__close(prog);
+
+		prog = xdp_program__open_file(filename, section_name, NULL);
+		xdp_program__attach(prog, ifindex, XDP_MODE_NATIVE, 0);
+		xdp_program__close(prog);
+	}
+	if (step == 3) {
+		// close some
+		mp = xdp_multiprog__get_from_ifindex(ifindex);
+		if (IS_ERR_OR_NULL(mp))
+			return 1;
+
+		prog = xdp_multiprog__hw_prog(mp);
+		if (prog)
+			xdp_program__detach(prog, ifindex, XDP_MODE_HW, 0);
+		else
+			printf("No offloaded program found!\n");
+		xdp_multiprog__close(mp);
+		
+	}
+	if (step == 4) {
+		// close all
+		mp = xdp_multiprog__get_from_ifindex(ifindex);
+		xdp_multiprog__detach(mp);
+		xdp_multiprog__close(mp);
+	}
+
 }
