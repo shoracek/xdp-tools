@@ -342,7 +342,7 @@ test_multi_pkt()
     for PKT_SIZE in "${PKT_SIZES[@]}" ; do
 
         PID=$(start_background_no_stderr "$XDPDUMP -i $NS -p xdp_test_prog_with_a_long_name --rx-capture=entry,exit")
-        time $PING6 -W 2 -s "$PKT_SIZE" -c 20000 -f "$INSIDE_IP6" || return 1
+        time $PING6 -q -W 2 -s "$PKT_SIZE" -c 20000 -f "$INSIDE_IP6" || return 1
         RESULT=$(stop_background "$PID")
         if ! [[ $RESULT =~ $PASS_ENTRY_REGEX ]]; then
             print_result "IPv6 entry packet not received, $PKT_SIZE"
@@ -353,8 +353,6 @@ test_multi_pkt()
             print_result "IPv6 exit packet not received, $PKT_SIZE"
             return 1
         fi
-
-        time $PING6 -q -W 2 -s "$PKT_SIZE" -c 20000 -f "$INSIDE_IP6" || return 1
     done
 
     $XDP_LOADER unload "$NS" --all || return 1
@@ -392,14 +390,12 @@ test_perf_wakeup()
 
         # We sent 10k packets and see if the all arrive
         PID=$(start_background_no_stderr "$XDPDUMP -i $NS -p xdp_test_prog_with_a_long_name --perf-wakeup=$WAKEUP")
-        time "$PING6" -W 2 -c 10000 -f  "$INSIDE_IP6" || return 1
+        time "$PING6" -W 2 -c 20000 -f  "$INSIDE_IP6" || return 1
         RESULT=$(stop_background "$PID")
         if ! [[ $RESULT =~ $PASS_10K_REGEX ]]; then
             print_result "IPv6 10k packet not received for wakeup $WAKEUP"
             return 1
         fi
-        
-        time "$PING6" -q -W 2 -c 10000 -f  "$INSIDE_IP6" || return 1
     done
 
     $XDP_LOADER unload "$NS" --all || return 1
