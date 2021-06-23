@@ -4,6 +4,7 @@
 # shellcheck disable=2039
 #
 ALL_TESTS="test_help test_interfaces test_capt_pcap test_capt_pcapng test_capt_term test_exitentry test_snap test_multi_pkt test_perf_wakeup test_promiscuous_selfload test_promiscuous_preload test_none_xdp test_pname_parse test_multi_prog test_xdp_load"
+ALL_TESTS="test_help test_multi_pkt test_perf_wakeup test_multi_pkt test_perf_wakeup test_multi_pkt test_perf_wakeup test_multi_pkt test_perf_wakeup test_multi_pkt test_perf_wakeup test_multi_pkt test_perf_wakeup test_multi_pkt test_perf_wakeup"
 
 XDPDUMP=${XDPDUMP:-./xdpdump}
 XDP_LOADER=${XDP_LOADER:-../xdp-loader/xdp-loader}
@@ -341,7 +342,7 @@ test_multi_pkt()
     for PKT_SIZE in "${PKT_SIZES[@]}" ; do
 
         PID=$(start_background_no_stderr "$XDPDUMP -i $NS -p xdp_test_prog_with_a_long_name --rx-capture=entry,exit")
-        timeout 40 $PING6 -q -W 2 -s "$PKT_SIZE" -c 20000 -f "$INSIDE_IP6" || return 1
+        time $PING6 -W 2 -s "$PKT_SIZE" -c 20000 -f "$INSIDE_IP6" || return 1
         RESULT=$(stop_background "$PID")
         if ! [[ $RESULT =~ $PASS_ENTRY_REGEX ]]; then
             print_result "IPv6 entry packet not received, $PKT_SIZE"
@@ -352,9 +353,13 @@ test_multi_pkt()
             print_result "IPv6 exit packet not received, $PKT_SIZE"
             return 1
         fi
+
+        time $PING6 -q -W 2 -s "$PKT_SIZE" -c 20000 -f "$INSIDE_IP6" || return 1
     done
 
     $XDP_LOADER unload "$NS" --all || return 1
+
+    return 1
 }
 
 test_perf_wakeup()
@@ -387,15 +392,19 @@ test_perf_wakeup()
 
         # We sent 10k packets and see if the all arrive
         PID=$(start_background_no_stderr "$XDPDUMP -i $NS -p xdp_test_prog_with_a_long_name --perf-wakeup=$WAKEUP")
-        timeout 20 "$PING6" -q -W 2 -c 10000 -f  "$INSIDE_IP6" || return 1
+        time "$PING6" -W 2 -c 10000 -f  "$INSIDE_IP6" || return 1
         RESULT=$(stop_background "$PID")
         if ! [[ $RESULT =~ $PASS_10K_REGEX ]]; then
             print_result "IPv6 10k packet not received for wakeup $WAKEUP"
             return 1
         fi
+        
+        time "$PING6" -q -W 2 -c 10000 -f  "$INSIDE_IP6" || return 1
     done
 
     $XDP_LOADER unload "$NS" --all || return 1
+
+    return 1
 }
 
 test_none_xdp()
